@@ -1641,7 +1641,7 @@ class MapleStoryAutoBot:
 
     def get_monsters_in_range(self, top_left, bottom_right):
         '''
-        get_monsters_in_range
+        Detect monsters with frame-relative position (x, y) and size (width, height).
         '''
         x0, y0 = top_left
         x1, y1 = bottom_right
@@ -1705,7 +1705,7 @@ class MapleStoryAutoBot:
                         monsters.append({
                             "name": monster_name,
                             "position": (pt[0] + x0, pt[1] + y0),
-                            "size": (h, w),
+                            "size": (w, h),
                             "score": res[pt[1], pt[0]],
                         })
                 elif self.cfg["monster_detect"]["mode"] == "grayscale":
@@ -1722,7 +1722,7 @@ class MapleStoryAutoBot:
                         monsters.append({
                             "name": monster_name,
                             "position": (pt[0] + x0, pt[1] + y0),
-                            "size": (h, w),
+                            "size": (w, h),
                             "score": res[pt[1], pt[0]],
                     })
                 elif self.cfg["monster_detect"]["mode"] == "color":
@@ -1737,7 +1737,7 @@ class MapleStoryAutoBot:
                         monsters.append({
                             "name": monster_name,
                             "position": (pt[0] + x0, pt[1] + y0),
-                            "size": (h, w),
+                            "size": (w, h),
                             "score": res[pt[1], pt[0]],
                     })
                 else:
@@ -1778,7 +1778,7 @@ class MapleStoryAutoBot:
                 monsters.append({
                     "name": "Health Bar",
                     "position": (x0 + x, y0 + y),
-                    "size": (h, w),
+                    "size": (w, h),
                     "score": 1.0,
                 })
 

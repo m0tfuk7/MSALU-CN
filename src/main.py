@@ -1,12 +1,42 @@
 # Standard Import
+import ctypes
+from ctypes import wintypes
+import os
+import subprocess
 import sys
 
-# Pyside
-from PySide6.QtWidgets import QApplication
 
-# Load Import
-from src.ui.ui import MainWindow
-from src.ui.AutoBotController import AutoBotController
+def _ensure_admin() -> bool:
+    """Continue only when elevated; otherwise relaunch through the Windows UAC prompt."""
+    if sys.platform != "win32":
+        return True
+
+    shell32 = ctypes.windll.shell32
+    if shell32.IsUserAnAdmin():
+        return True
+
+    args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.orig_argv[1:]
+    shell_execute = shell32.ShellExecuteW
+    shell_execute.argtypes = [
+        wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
+        wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int,
+    ]
+    shell_execute.restype = ctypes.c_void_p
+    result = shell_execute(
+        None, "runas", sys.executable, subprocess.list2cmdline(args), os.getcwd(), 1)
+    if result is not None and result > 32:
+        return False
+
+    from src.utils.logger import logger
+    message = (
+        f"无法以管理员身份启动（ShellExecuteW 错误码：{result}）。\n"
+        "请重新打开程序，并在 Windows 用户账户控制提示中选择“是”。\n"
+        "本次不会以普通权限继续运行。"
+    )
+    logger.error(message)
+    ctypes.windll.user32.MessageBoxW(None, message, "需要管理员权限", 0x10)
+    raise PermissionError(message)
+
 
 def _run_tool(argv):
     """打包后用**自身 exe** 跑 tools/ 下的子工具。
@@ -36,9 +66,20 @@ def main():
     Main Function
     Run: python -m ui.main
     '''
+    if not _ensure_admin():
+        return
+
     # 打包后跑子工具的入口（见 _run_tool）：有 --tool 就不起界面
     if len(sys.argv) > 1 and sys.argv[1] == "--tool":
         sys.exit(_run_tool(sys.argv[2:]))
+
+    from PySide6.QtWidgets import QApplication
+    from src.ui.ui import MainWindow
+    from src.ui.AutoBotController import AutoBotController
+    from src.utils.logger import logger
+
+    if sys.platform == "win32":
+        logger.info(f"[启动] 管理员权限已确认（PID {os.getpid()}）")
 
     app = QApplication(sys.argv)
 

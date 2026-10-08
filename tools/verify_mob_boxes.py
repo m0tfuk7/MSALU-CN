@@ -8,13 +8,13 @@ verify_mob_boxes.py
     用户反馈「怪有时候很灵敏，有时候冲上去了都识别不到」，靠肉眼判断
     「引擎到底看见没看见」的唯一抓手就是逐怪画框。之前那句「按用户要求去掉」
     的注释是**记错的** —— 用户只要求把标签改中文。现在按开关加回，必须钉死：
-      ① 开关默认 **关**（不打扰要求画面干净的用户）；
+      ① 开关默认 **开**（方便排查漏检）；
       ② 开关打开时，**每只怪**都画一个框，位置 = 检测到的 position/size；
       ③ 配色沿用上游：**黄=血条检出、绿=模板检出**；
       ④ 框只画在 **img_frame_debug** 上，**绝不碰 img_frame**（识别用的图）；
-      ⑤ 画框代码在 get_monsters_in_range **返回前** —— 保证框与 self.monsters
-         是同一批数据（怪检测会降频，放帧尾去画会拿旧数据画新帧 → 框错位）；
+      ⑤ 画框在帧尾每帧重画，检测降频时沿用上次结果；
       ⑥ 脏数据（position/size 缺失、尺寸为 0 或超大）不得抛异常把主循环带崩。
+      ⑦ 检测结果 size 统一为 (width, height)，非正方形模板不得画反宽高。
 
 跑法：
     python -m tools.verify_mob_boxes
@@ -25,6 +25,7 @@ verify_mob_boxes.py
 
 import sys
 import time
+import cv2
 import numpy as np
 
 sys.path.insert(0, '.')
@@ -52,6 +53,7 @@ def check_true(name, cond, detail=""):
 # 桩：只借 get_monsters_in_range 一段逻辑，不走 __init__（会去抓窗口）
 # ─────────────────────────────────────────────────────────────────────────
 from src.engine.MapleStoryAutoLevelUp import MapleStoryAutoBot  # noqa: E402
+from src.utils.common import nms  # noqa: E402
 
 
 def _make_bot_with_fake_templates(draw_boxes, frame_shape=(200, 200, 3),
@@ -349,6 +351,76 @@ check_true("原位置留有「已挪到帧尾」的指引（防止后人误以�
            "挪到帧尾" in _src_draw or "update_info_on_img_frame_debug" in _src_draw)
 check_true("已写入 2026-09-29 的更正说明（标签侧）",
            "用户从没要求删掉逐怪小框" in _src_info)
+
+# Non-square templates expose size-order errors hidden by square fixtures.
+print("\n[8] Non-square detection, ROI offset, drawing and target geometry")
+for _mode in ("contour_only", "grayscale", "color"):
+    for _w, _h in ((60, 20), (20, 60)):
+        _bot = _make_bot_with_fake_templates(True, frame_shape=(260, 300, 3))
+        _bot.img_frame[:] = 255
+        _tpl = np.random.default_rng(42).integers(30, 230, (_h, _w, 3), dtype=np.uint8)
+        if _mode == "contour_only":
+            _tpl[:] = 0
+        _bot.img_frame[120:120 + _h, 130:130 + _w] = _tpl
+        _bot.monsters_info = {"rect": [(_tpl, None)]}
+        _bot.cfg["monster_detect"].update(
+            mode=_mode, contour_blur=1, diff_thres=0.00001,
+            max_mob_area_trigger=1000)
+        _bot.monsters = _bot.get_monsters_in_range((80, 70), (280, 250))
+        _label = f"{_mode} {_w}x{_h}"
+        check(f"{_label}: unique match", len(_bot.monsters), 1)
+        if len(_bot.monsters) != 1:
+            continue
+        _m = _bot.monsters[0]
+        check(f"{_label}: global top-left", _m["position"], (130, 120))
+        check(f"{_label}: size is width, height", _m["size"], (_w, _h))
+        _before = _bot.img_frame.copy()
+        _bot.update_info_on_img_frame_debug()
+        _expected = np.zeros(_bot.img_frame.shape[:2], np.uint8)
+        cv2.rectangle(_expected, (130, 120), (130 + _w, 120 + _h), 1, 2)
+        _actual = np.all(_bot.img_frame_debug == (0, 255, 0), axis=2)
+        check_true(f"{_label}: exact green rectangle pixels",
+                   np.array_equal(_actual, _expected.astype(bool)))
+        check_true(f"{_label}: source frame unchanged",
+                   np.array_equal(_before, _bot.img_frame))
+        if (_w, _h) == (60, 20):
+            _overlap = dict(_m, position=(145, 120))
+            _separate = dict(_m, position=(130, 145))
+            check(f"{_label}: NMS removes horizontal overlap",
+                  len(nms([_m, _overlap], iou_threshold=0.4)), 1)
+            check(f"{_label}: NMS keeps vertically separate boxes",
+                  len(nms([_m, _separate], iou_threshold=0.4)), 2)
+            _bot.loc_player = (100, 130)
+            _bot.cfg["aoe_skill"].update(range_x=160, range_y=40)
+            check_true(f"{_label}: 1000px overlap meets attack threshold",
+                       _bot.get_nearest_monster() is _m)
+            _bot.cfg["monster_detect"]["max_mob_area_trigger"] = 1001
+            check(f"{_label}: 1000px overlap below 1001 threshold",
+                  _bot.get_nearest_monster(), None)
+            _bot.loc_player = (150, 130)
+            check(f"{_label}: directional target center is on right",
+                  _bot.get_attack_direction(None, _m), "right")
+            check(f"{_label}: AOE target center is on right",
+                  _bot.get_face_direction(), "right")
+
+print("\n[9] Health-bar boxes use the same width, height convention")
+_bot = _make_bot_with_fake_templates(True, frame_shape=(300, 300, 3))
+_bot.img_frame[:] = 255
+_bot.img_frame[120:122, 140:150] = (71, 204, 64)
+_bot.monsters_info = {}
+_bot.cfg["monster_detect"]["with_enemy_hp_bar"] = True
+_bot.monsters = _bot.get_monsters_in_range((80, 70), (280, 280))
+check("health bar: unique match", len(_bot.monsters), 1)
+if len(_bot.monsters) == 1:
+    check("health bar: ROI offset and vertical offset",
+          _bot.monsters[0]["position"], (140, 130))
+    check("health bar: width, height", _bot.monsters[0]["size"], (70, 100))
+    _bot.update_info_on_img_frame_debug()
+    _expected = np.zeros((300, 300), np.uint8)
+    cv2.rectangle(_expected, (140, 130), (210, 230), 1, 2)
+    check_true("health bar: exact yellow rectangle pixels",
+               np.array_equal(np.all(_bot.img_frame_debug == (0, 255, 255), axis=2),
+                              _expected.astype(bool)))
 
 # ─────────────────────────────────────────────────────────────────────────
 print("\n" + "=" * 68)

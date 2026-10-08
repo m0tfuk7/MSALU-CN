@@ -170,7 +170,7 @@ def main():
         except Exception:
             pass
         for m in monsters:
-            (mx, my), (mh, mw) = m["position"], m["size"]
+            (mx, my), (mw, mh) = m["position"], m["size"]
             cv2.rectangle(dbg, (mx, my), (mx + mw, my + mh), (0, 0, 255), 2)
             cv2.putText(dbg, f"{m['name']} {m['score']:.4f}", (mx, max(12, my - 4)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)

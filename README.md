@@ -125,6 +125,10 @@ pip install -r requirements.txt
 
 其中 `interception-python` 用于内核级按键模拟，需要管理员权限运行；`windows-capture` 用于抓帧。
 
+GUI 启动入口会自动检查管理员权限；权限不足时通过 Windows UAC 请求提权，
+请点击“是”。源码启动（`启动界面.bat` / `python run_gui.py`）和重新打包后的
+EXE 均生效，无需每次右键启动。取消或提权失败会明确报错，不会以普通权限继续打开 GUI。
+
 > ⚠️ **两个依赖的门槛不一样，别混为一谈**（2026-09-27 实测确认）：
 >
 > | 用途 | 依赖 | 额外要装系统组件吗 |

@@ -15,6 +15,15 @@ debug/
 *__pycache__/
 *.pyc
 
+# Python virtual environments
+.venv/
+venv/
+.env/
+env/
+ENV/
+.venv*/
+venv*/
+
 # 编辑器 / 系统
 *.DS_Store
 .idea/
@@ -59,4 +68,3 @@ minimaps/*
 !minimaps/.gitkeep
 monster/*
 !monster/.gitkeep
-
