@@ -57,6 +57,7 @@ ADV_SETTINGS_HIDE = [
     'directional_attack',   # 攻击范围 / 冷却  -> 主界面「攻击设置」
     'aoe_skill',            # 同上（攻击模式切到 AOE 时）
     'damage_counterattack', # 重叠怪受击反击   -> 主界面「攻击设置」
+    'humanized_break',      # 巡逻随机停顿     -> 主界面「拟人化操作」
     'minimap',              # 小地图取色 / 缩放 -> 纯算法与显示参数
     # ⚠️ 'route' 已于 2026-09-14 **移出**本表：需要把「平台边缘安全余量」
     #    (edge_guard_inset) 暴露给用户按地形调 —— 窄平台和宽平台该值差别很大
@@ -869,6 +870,9 @@ class MainWindow(QMainWindow):
         self.attack_gbox = self.create_attack_gbox()
         scroll_layout.addWidget(self.attack_gbox)
 
+        self.humanized_break_gbox = self.create_humanized_break_gbox()
+        scroll_layout.addWidget(self.humanized_break_gbox)
+
         # Key bindings group box
         self.key_binding_gbox = self.create_key_binding_gbox()
         scroll_layout.addWidget(self.key_binding_gbox)
@@ -1319,50 +1323,41 @@ class MainWindow(QMainWindow):
             "重叠反击（未识别到怪但持续掉血时攻击）")
         self.checkbox_damage_counterattack.setToolTip(
             "怪物重叠或特效遮挡导致识别失败时，连续检测到掉血会暂时停止巡逻并反击；"
-            "不再掉血后自动恢复巡逻。")
+            "触发后会保证一段持续输出时间，再根据索敌和掉血情况恢复巡逻。")
 
         counterattack_form = QFormLayout()
-        self.counterattack_detect_window = QDoubleSpinBox()
-        self.counterattack_detect_window.setLocale(
-            QLocale(QLocale.Chinese, QLocale.China))
-        self.counterattack_detect_window.setRange(0.1, 10.0)
-        self.counterattack_detect_window.setSingleStep(0.1)
-        self.counterattack_detect_window.setDecimals(1)
-        self.counterattack_detect_window.setSuffix(" 秒")
-        self.counterattack_detect_window.setMinimumWidth(150)
+        self.counterattack_detect_window = QLineEdit()
+        self.counterattack_detect_window.setFixedWidth(60)
         self.counterattack_detect_window.setToolTip(
             "在这段时间内统计有效掉血次数。调大更容易触发，调小要求掉血更密集。")
         counterattack_form.addRow(
-            "掉血检测窗口：", self.counterattack_detect_window)
+            "掉血检测窗口（秒）：", self.counterattack_detect_window)
 
-        self.counterattack_confirm_drops = QSpinBox()
-        self.counterattack_confirm_drops.setLocale(
-            QLocale(QLocale.Chinese, QLocale.China))
-        self.counterattack_confirm_drops.setRange(1, 10)
-        self.counterattack_confirm_drops.setSingleStep(1)
-        self.counterattack_confirm_drops.setSuffix(" 次")
-        self.counterattack_confirm_drops.setMinimumWidth(150)
+        self.counterattack_confirm_drops = QLineEdit()
+        self.counterattack_confirm_drops.setFixedWidth(60)
         self.counterattack_confirm_drops.setToolTip(
             "检测窗口内至少出现多少次有效掉血才开始反击。调小反应快，调大更稳。")
         counterattack_form.addRow(
-            "确认掉血次数：", self.counterattack_confirm_drops)
+            "确认掉血次数（次）：", self.counterattack_confirm_drops)
 
-        self.counterattack_quiet_exit = QDoubleSpinBox()
-        self.counterattack_quiet_exit.setLocale(
-            QLocale(QLocale.Chinese, QLocale.China))
-        self.counterattack_quiet_exit.setRange(0.1, 30.0)
-        self.counterattack_quiet_exit.setSingleStep(0.1)
-        self.counterattack_quiet_exit.setDecimals(1)
-        self.counterattack_quiet_exit.setSuffix(" 秒")
-        self.counterattack_quiet_exit.setMinimumWidth(150)
+        self.counterattack_min_duration = QLineEdit()
+        self.counterattack_min_duration.setFixedWidth(60)
+        self.counterattack_min_duration.setToolTip(
+            "反击触发后至少持续攻击这么久；期间偶发识别到怪或短暂无掉血也不会恢复巡逻。")
+        counterattack_form.addRow(
+            "最短持续输出（秒）：", self.counterattack_min_duration)
+
+        self.counterattack_quiet_exit = QLineEdit()
+        self.counterattack_quiet_exit.setFixedWidth(60)
         self.counterattack_quiet_exit.setToolTip(
             "进入反击后，连续这么久没有再次掉血就停止攻击并恢复巡逻。")
         counterattack_form.addRow(
-            "无掉血退出时间：", self.counterattack_quiet_exit)
+            "无掉血退出时间（秒）：", self.counterattack_quiet_exit)
 
         def toggle_counterattack_fields(enabled):
             self.counterattack_detect_window.setEnabled(enabled)
             self.counterattack_confirm_drops.setEnabled(enabled)
+            self.counterattack_min_duration.setEnabled(enabled)
             self.counterattack_quiet_exit.setEnabled(enabled)
 
         self.checkbox_damage_counterattack.toggled.connect(
@@ -1381,6 +1376,18 @@ class MainWindow(QMainWindow):
             lambda: validate_numerical_input(self.attack_range_y.text(), error_label, 0, 9999))
         self.attack_cooldown.editingFinished.connect(
             lambda: validate_numerical_input(self.attack_cooldown.text(), error_label, 0, 9999))
+        self.counterattack_detect_window.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.counterattack_detect_window.text(), error_label, 0.1, 10.0))
+        self.counterattack_confirm_drops.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.counterattack_confirm_drops.text(), error_label, 1, 10))
+        self.counterattack_min_duration.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.counterattack_min_duration.text(), error_label, 0.1, 30.0))
+        self.counterattack_quiet_exit.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.counterattack_quiet_exit.text(), error_label, 0.1, 30.0))
 
         # Final layout
         layout = QVBoxLayout()
@@ -1390,6 +1397,91 @@ class MainWindow(QMainWindow):
         layout.addLayout(counterattack_form)
         gbox.setLayout(layout)
         return gbox
+
+    def create_humanized_break_gbox(self):
+        gbox = QGroupBox("🕒 拟人化操作")
+        layout = QVBoxLayout()
+
+        self.checkbox_humanized_break = QCheckBox(
+            "启用巡逻随机停顿")
+        self.checkbox_humanized_break.setToolTip(
+            "正常巡逻时随机停下并松开移动、跳跃和攻击按键，停顿结束后自动继续。")
+        layout.addWidget(self.checkbox_humanized_break, alignment=Qt.AlignLeft)
+
+        form = QFormLayout()
+
+        self.humanized_interval_min = QLineEdit()
+        self.humanized_interval_min.setFixedWidth(60)
+        form.addRow("最短触发间隔（分钟）：", self.humanized_interval_min)
+
+        self.humanized_interval_max = QLineEdit()
+        self.humanized_interval_max.setFixedWidth(60)
+        form.addRow("最长触发间隔（分钟）：", self.humanized_interval_max)
+
+        self.humanized_duration_min = QLineEdit()
+        self.humanized_duration_min.setFixedWidth(60)
+        form.addRow("最短停顿时间（秒）：", self.humanized_duration_min)
+
+        self.humanized_duration_max = QLineEdit()
+        self.humanized_duration_max.setFixedWidth(60)
+        form.addRow("最长停顿时间（秒）：", self.humanized_duration_max)
+
+        self.humanized_random_keys = QLineEdit()
+        self.humanized_random_keys.setPlaceholderText("留空关闭，例如：f9, f10")
+        self.humanized_random_keys.setToolTip(
+            "每次停顿随机选择其中一个键短按一次，使用英文逗号分隔。"
+            "不存在通用的安全按键，请勿填写移动、攻击、药水、聊天或系统快捷键。")
+        form.addRow("随机短按键：", self.humanized_random_keys)
+        layout.addLayout(form)
+
+        fields = (
+            self.humanized_interval_min,
+            self.humanized_interval_max,
+            self.humanized_duration_min,
+            self.humanized_duration_max,
+            self.humanized_random_keys,
+        )
+
+        def toggle_fields(enabled):
+            for field in fields:
+                field.setEnabled(enabled)
+
+        self.checkbox_humanized_break.toggled.connect(toggle_fields)
+        toggle_fields(self.checkbox_humanized_break.isChecked())
+        error_label = create_error_label()
+        self.humanized_interval_min.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.humanized_interval_min.text(), error_label, 0.1, 1440.0))
+        self.humanized_interval_max.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.humanized_interval_max.text(), error_label, 0.1, 1440.0))
+        self.humanized_duration_min.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.humanized_duration_min.text(), error_label, 0.1, 300.0))
+        self.humanized_duration_max.editingFinished.connect(
+            lambda: validate_numerical_input(
+                self.humanized_duration_max.text(), error_label, 0.1, 300.0))
+        layout.addWidget(error_label)
+        gbox.setLayout(layout)
+        return gbox
+
+    def _apply_humanized_break_config_to_ui(self):
+        humanized_cfg = self.cfg.get("humanized_break", {})
+        self.checkbox_humanized_break.setChecked(
+            bool(humanized_cfg.get("enabled", False)))
+        self.humanized_interval_min.setText(str(
+            float(humanized_cfg.get("interval_min_sec", 180.0)) / 60.0))
+        self.humanized_interval_max.setText(str(
+            float(humanized_cfg.get("interval_max_sec", 480.0)) / 60.0))
+        self.humanized_duration_min.setText(str(
+            float(humanized_cfg.get("duration_min_sec", 2.0))))
+        self.humanized_duration_max.setText(str(
+            float(humanized_cfg.get("duration_max_sec", 6.0))))
+        random_keys = humanized_cfg.get("random_keys", []) or []
+        if isinstance(random_keys, str):
+            random_keys = random_keys.replace("，", ",").split(",")
+        self.humanized_random_keys.setText(
+            ", ".join(str(key).strip() for key in random_keys if str(key).strip()))
 
     def create_pickup_gbox(self):
         '''
@@ -2127,7 +2219,10 @@ class MainWindow(QMainWindow):
         把新标定结果覆盖回旧值（换号必踩）。段级合并后：主界面管理的段
         （bot/key/攻击/buff）以界面为准，其余段（nametag 等）以磁盘为准。
         '''
-        managed = ('bot', 'key', 'directional_attack', 'aoe_skill', 'buff_skill')
+        managed = (
+            'bot', 'key', 'directional_attack', 'aoe_skill', 'buff_skill',
+            'damage_counterattack', 'humanized_break',
+        )
         try:
             # 静默读（yaml.safe_load 直读）—— 本函数被 3 秒定时器反复调用，
             # 走 load_yaml 会每 3 秒打两条 INFO 刷屏日志（2026-09-12 用户实测）
@@ -2156,7 +2251,10 @@ class MainWindow(QMainWindow):
     # ---- 配置方案下拉框（2026-09-12 用户设计：新建/切换/自动保存三合一）----
     # 主界面管理的段（保存时以界面为准，防止工具写盘的结果被覆盖的合并逻辑见
     # _merge_disk_owned_sections；其余段以磁盘为准）。
-    _MANAGED_SECTIONS = ('bot', 'key', 'directional_attack', 'aoe_skill', 'buff_skill')
+    _MANAGED_SECTIONS = (
+        'bot', 'key', 'directional_attack', 'aoe_skill', 'buff_skill',
+        'damage_counterattack', 'humanized_break',
+    )
 
     def _config_display_name(self, path):
         return os.path.splitext(os.path.basename(path))[0]
@@ -2428,12 +2526,15 @@ class MainWindow(QMainWindow):
             counterattack_cfg = self.cfg.get("damage_counterattack", {})
             self.checkbox_damage_counterattack.setChecked(
                 bool(counterattack_cfg.get("enabled", False)))
-            self.counterattack_detect_window.setValue(
-                float(counterattack_cfg.get("detect_window_sec", 0.8)))
-            self.counterattack_confirm_drops.setValue(
-                int(counterattack_cfg.get("confirm_drops", 2)))
-            self.counterattack_quiet_exit.setValue(
-                float(counterattack_cfg.get("quiet_exit_sec", 1.2)))
+            self.counterattack_detect_window.setText(str(
+                float(counterattack_cfg.get("detect_window_sec", 0.8))))
+            self.counterattack_confirm_drops.setText(str(
+                int(counterattack_cfg.get("confirm_drops", 2))))
+            self.counterattack_min_duration.setText(str(
+                float(counterattack_cfg.get("min_duration_sec", 2.5))))
+            self.counterattack_quiet_exit.setText(str(
+                float(counterattack_cfg.get("quiet_exit_sec", 1.2))))
+            self._apply_humanized_break_config_to_ui()
 
     def apply_config_to_ui(self):
         # === 挂机方式 ===
@@ -2464,12 +2565,15 @@ class MainWindow(QMainWindow):
         counterattack_cfg = self.cfg.get("damage_counterattack", {})
         self.checkbox_damage_counterattack.setChecked(
             bool(counterattack_cfg.get("enabled", False)))
-        self.counterattack_detect_window.setValue(
-            float(counterattack_cfg.get("detect_window_sec", 0.8)))
-        self.counterattack_confirm_drops.setValue(
-            int(counterattack_cfg.get("confirm_drops", 2)))
-        self.counterattack_quiet_exit.setValue(
-            float(counterattack_cfg.get("quiet_exit_sec", 1.2)))
+        self.counterattack_detect_window.setText(str(
+            float(counterattack_cfg.get("detect_window_sec", 0.8))))
+        self.counterattack_confirm_drops.setText(str(
+            int(counterattack_cfg.get("confirm_drops", 2))))
+        self.counterattack_min_duration.setText(str(
+            float(counterattack_cfg.get("min_duration_sec", 2.5))))
+        self.counterattack_quiet_exit.setText(str(
+            float(counterattack_cfg.get("quiet_exit_sec", 1.2))))
+        self._apply_humanized_break_config_to_ui()
 
         # === Key Bindings ===
         key_cfg = self.cfg["key"]
@@ -2519,6 +2623,7 @@ class MainWindow(QMainWindow):
             self.key_binding_gbox,
             self.buff_skill_gbox,
             self.map_selection_gbox,
+            self.humanized_break_gbox,
         ]
         gboxs += list(self.advance_settings_gboxes.values())
         # Apply disable + style
@@ -3830,12 +3935,39 @@ class MainWindow(QMainWindow):
         counterattack_cfg = self.cfg.setdefault("damage_counterattack", {})
         counterattack_cfg["enabled"] = (
             self.checkbox_damage_counterattack.isChecked())
-        counterattack_cfg["detect_window_sec"] = round(
-            self.counterattack_detect_window.value(), 1)
-        counterattack_cfg["confirm_drops"] = (
-            self.counterattack_confirm_drops.value())
-        counterattack_cfg["quiet_exit_sec"] = round(
-            self.counterattack_quiet_exit.value(), 1)
+        counterattack_cfg["detect_window_sec"] = round(_num(
+            self.counterattack_detect_window.text(),
+            counterattack_cfg.get("detect_window_sec", 0.8), float), 1)
+        counterattack_cfg["confirm_drops"] = _num(
+            self.counterattack_confirm_drops.text(),
+            counterattack_cfg.get("confirm_drops", 2), int)
+        counterattack_cfg["min_duration_sec"] = round(_num(
+            self.counterattack_min_duration.text(),
+            counterattack_cfg.get("min_duration_sec", 2.5), float), 1)
+        counterattack_cfg["quiet_exit_sec"] = round(_num(
+            self.counterattack_quiet_exit.text(),
+            counterattack_cfg.get("quiet_exit_sec", 1.2), float), 1)
+        humanized_cfg = self.cfg.setdefault("humanized_break", {})
+        humanized_cfg["enabled"] = self.checkbox_humanized_break.isChecked()
+        humanized_cfg["interval_min_sec"] = round(_num(
+            self.humanized_interval_min.text(),
+            float(humanized_cfg.get("interval_min_sec", 180.0)) / 60.0,
+            float) * 60.0, 1)
+        humanized_cfg["interval_max_sec"] = round(_num(
+            self.humanized_interval_max.text(),
+            float(humanized_cfg.get("interval_max_sec", 480.0)) / 60.0,
+            float) * 60.0, 1)
+        humanized_cfg["duration_min_sec"] = round(_num(
+            self.humanized_duration_min.text(),
+            humanized_cfg.get("duration_min_sec", 2.0), float), 1)
+        humanized_cfg["duration_max_sec"] = round(_num(
+            self.humanized_duration_max.text(),
+            humanized_cfg.get("duration_max_sec", 6.0), float), 1)
+        humanized_cfg["random_keys"] = list(dict.fromkeys(
+            key.strip().lower()
+            for key in self.humanized_random_keys.text().replace("，", ",").split(",")
+            if key.strip()
+        ))
         # Key binding gbox
         self.cfg["key"]["teleport"] = _key(
             self.teleport_key, self.cfg["key"].get("teleport"))
