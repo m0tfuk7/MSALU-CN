@@ -88,8 +88,9 @@ damage_counterattack:
   detect_window_sec: 0.8
   min_single_drop_percent: 0.5
   min_total_drop_percent: 1.5
+  min_duration_sec: 2.5       # 触发后至少持续输出多久；期间偶发识别到怪也不会恢复巡逻
   quiet_exit_sec: 1.2
-  max_duration_sec: 4.0
+  max_duration_sec: 4.0       # 安全硬上限，优先级高于最短输出时间
   direction_switch_sec: 0.8
 
 # 血量监控（health_monitor）已于 2026-09-10 移除：

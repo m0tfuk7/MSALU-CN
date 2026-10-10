@@ -554,11 +554,11 @@ class MapleStoryAutoBot:
         if self.damage_counterattack.cancel():
             logger.info(f"[重叠反击] 结束：{reason}，恢复原有逻辑。")
 
-    def _apply_damage_counterattack(self, cooldown):
+    def _apply_damage_counterattack(self, cooldown, has_detected_monsters=False):
         now = time.time()
         decision = self.damage_counterattack.decide(
             now=time.monotonic(),
-            has_detected_monsters=False,
+            has_detected_monsters=has_detected_monsters,
             attack_mode=self.cfg["bot"]["attack"],
             attack_ready=now - self.t_last_attack > cooldown,
             current_direction=self.cmd_move_x_last,
@@ -4489,7 +4489,12 @@ class MapleStoryAutoBot:
                 self.cmd_action = "none"
             return
 
-        self._cancel_damage_counterattack("重新识别到怪物")
+        # 重叠反击触发后保证一段最短持续输出时间。怪物密集或特效闪烁时，
+        # 模板识别可能偶尔恢复一帧，不能因此立刻交还路线、重新开始巡逻。
+        if (self.damage_counterattack.active
+                and self._apply_damage_counterattack(
+                    cooldown, has_detected_monsters=True)):
+            return
 
         # Update attack command
         if self.cfg["bot"]["attack"] == "aoe_skill":

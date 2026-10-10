@@ -20,6 +20,7 @@ def counterattack(**overrides):
         "detect_window_sec": 0.8,
         "min_single_drop_percent": 0.5,
         "min_total_drop_percent": 1.5,
+        "min_duration_sec": 2.5,
         "quiet_exit_sec": 1.2,
         "max_duration_sec": 4.0,
         "direction_switch_sec": 0.8,
@@ -54,7 +55,10 @@ def main():
           decision.move_x == "none" and decision.should_attack)
 
     decision = decide(state, 0.5, monsters=True)
-    check("重新识别到怪物后立即交还正常索敌",
+    check("最短输出期间重新识别到怪也继续反击",
+          decision.active and decision.should_attack)
+    decision = decide(state, 2.91, monsters=True)
+    check("最短输出完成且识别到怪后交还正常索敌",
           not decision.active and decision.event == "stopped")
 
     state = counterattack()
@@ -63,8 +67,11 @@ def main():
     state.observe_hp(98.0, 0.4)
     decide(state, 0.4)
     decision = decide(state, 1.61)
-    check("超过静默时间未掉血后恢复巡逻",
-          not decision.active and decision.reason == "持续未再掉血")
+    check("最短输出期间即使未再掉血也保持反击", decision.active)
+    decision = decide(state, 2.91)
+    check("最短输出完成且超过静默时间后恢复巡逻",
+          not decision.active
+          and decision.reason == "最短输出完成且持续未再掉血")
 
     state = counterattack()
     state.observe_hp(100.0, 0.0)

@@ -11,6 +11,7 @@ class DamageCounterattackConfig:
     detect_window_sec: float = 0.8
     min_single_drop_percent: float = 0.5
     min_total_drop_percent: float = 1.5
+    min_duration_sec: float = 2.5
     quiet_exit_sec: float = 1.2
     max_duration_sec: float = 4.0
     direction_switch_sec: float = 0.8
@@ -26,6 +27,7 @@ class DamageCounterattackConfig:
                 raw.get("min_single_drop_percent", 0.5)),
             min_total_drop_percent=float(
                 raw.get("min_total_drop_percent", 1.5)),
+            min_duration_sec=float(raw.get("min_duration_sec", 2.5)),
             quiet_exit_sec=float(raw.get("quiet_exit_sec", 1.2)),
             max_duration_sec=float(raw.get("max_duration_sec", 4.0)),
             direction_switch_sec=float(raw.get("direction_switch_sec", 0.8)),
@@ -35,6 +37,7 @@ class DamageCounterattackConfig:
             "detect_window_sec": cfg.detect_window_sec,
             "min_single_drop_percent": cfg.min_single_drop_percent,
             "min_total_drop_percent": cfg.min_total_drop_percent,
+            "min_duration_sec": cfg.min_duration_sec,
             "quiet_exit_sec": cfg.quiet_exit_sec,
             "max_duration_sec": cfg.max_duration_sec,
             "direction_switch_sec": cfg.direction_switch_sec,
@@ -113,16 +116,12 @@ class DamageCounterattack:
     ) -> CounterattackDecision:
         if not self.enabled:
             return CounterattackDecision(reason="功能未启用")
-        if has_detected_monsters:
-            stopped = self.cancel()
-            return CounterattackDecision(
-                event="stopped" if stopped else None,
-                reason="已恢复正常怪物索敌",
-            )
 
         self._prune_drops(now)
         event = None
         if not self.active:
+            if has_detected_monsters:
+                return CounterattackDecision(reason="正常怪物索敌中")
             if not self._damage_confirmed():
                 return CounterattackDecision(reason="等待连续掉血确认")
             self._active_since = now
@@ -145,17 +144,25 @@ class DamageCounterattack:
             self.cancel()
             return CounterattackDecision(
                 event="stopped", reason="达到最长反击时间")
-        if now - self._last_damage_at >= self.config.quiet_exit_sec:
-            self.cancel()
-            return CounterattackDecision(
-                event="stopped", reason="持续未再掉血")
+
+        minimum_elapsed = (
+            now - self._active_since >= self.config.min_duration_sec)
+        if minimum_elapsed:
+            if has_detected_monsters:
+                self.cancel()
+                return CounterattackDecision(
+                    event="stopped", reason="最短输出完成且已恢复正常怪物索敌")
+            if now - self._last_damage_at >= self.config.quiet_exit_sec:
+                self.cancel()
+                return CounterattackDecision(
+                    event="stopped", reason="最短输出完成且持续未再掉血")
 
         if attack_mode == "aoe_skill":
             return CounterattackDecision(
                 active=True,
                 should_attack=attack_ready,
                 event=event,
-                reason="未识别到怪但检测到持续掉血",
+                reason="重叠反击持续输出中",
             )
 
         if attack_mode != "directional":
