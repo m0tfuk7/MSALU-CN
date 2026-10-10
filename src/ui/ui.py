@@ -18,10 +18,11 @@ from PySide6.QtWidgets import (
     QCheckBox, QListWidget, QFileDialog, QHBoxLayout, QLineEdit,
     QPlainTextEdit, QTabWidget, QGroupBox, QFormLayout,
     QSizePolicy, QComboBox, QListWidgetItem, QScrollArea,
-    QInputDialog, QMessageBox, QDialog, QDialogButtonBox, QDoubleSpinBox
+    QInputDialog, QMessageBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QSpinBox
 )
 from PySide6.QtGui import QTextCharFormat, QColor, QTextCursor, QPixmap, QImage, QIcon
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QProcess
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QProcess, QLocale
 
 # Local import
 from src.utils.logger import logger
@@ -55,6 +56,7 @@ ADV_SETTINGS_HIDE = [
     'buff_skill',           # 增益技能        -> 主界面「宠物技能」
     'directional_attack',   # 攻击范围 / 冷却  -> 主界面「攻击设置」
     'aoe_skill',            # 同上（攻击模式切到 AOE 时）
+    'damage_counterattack', # 重叠怪受击反击   -> 主界面「攻击设置」
     'minimap',              # 小地图取色 / 缩放 -> 纯算法与显示参数
     # ⚠️ 'route' 已于 2026-09-14 **移出**本表：需要把「平台边缘安全余量」
     #    (edge_guard_inset) 暴露给用户按地形调 —— 窄平台和宽平台该值差别很大
@@ -1313,6 +1315,47 @@ class MainWindow(QMainWindow):
         columns.addSpacing(20)
         columns.addLayout(form_right)
 
+        self.checkbox_damage_counterattack = QCheckBox(
+            "重叠反击（未识别到怪但持续掉血时攻击）")
+        self.checkbox_damage_counterattack.setToolTip(
+            "怪物重叠或特效遮挡导致识别失败时，连续检测到掉血会暂时停止巡逻并反击；"
+            "不再掉血后自动恢复巡逻。")
+
+        counterattack_form = QFormLayout()
+        self.counterattack_detect_window = QDoubleSpinBox()
+        self.counterattack_detect_window.setLocale(
+            QLocale(QLocale.Chinese, QLocale.China))
+        self.counterattack_detect_window.setRange(0.1, 10.0)
+        self.counterattack_detect_window.setSingleStep(0.1)
+        self.counterattack_detect_window.setDecimals(1)
+        self.counterattack_detect_window.setSuffix(" 秒")
+        self.counterattack_detect_window.setMinimumWidth(150)
+        self.counterattack_detect_window.setToolTip(
+            "在这段时间内统计有效掉血次数。调大更容易触发，调小要求掉血更密集。")
+        counterattack_form.addRow(
+            "掉血检测窗口：", self.counterattack_detect_window)
+
+        self.counterattack_confirm_drops = QSpinBox()
+        self.counterattack_confirm_drops.setLocale(
+            QLocale(QLocale.Chinese, QLocale.China))
+        self.counterattack_confirm_drops.setRange(1, 10)
+        self.counterattack_confirm_drops.setSingleStep(1)
+        self.counterattack_confirm_drops.setSuffix(" 次")
+        self.counterattack_confirm_drops.setMinimumWidth(150)
+        self.counterattack_confirm_drops.setToolTip(
+            "检测窗口内至少出现多少次有效掉血才开始反击。调小反应快，调大更稳。")
+        counterattack_form.addRow(
+            "确认掉血次数：", self.counterattack_confirm_drops)
+
+        def toggle_counterattack_fields(enabled):
+            self.counterattack_detect_window.setEnabled(enabled)
+            self.counterattack_confirm_drops.setEnabled(enabled)
+
+        self.checkbox_damage_counterattack.toggled.connect(
+            toggle_counterattack_fields)
+        toggle_counterattack_fields(
+            self.checkbox_damage_counterattack.isChecked())
+
         # 挂机方式（2026-10-01 按用户要求移除该控件：定点驻守早已删除，只剩
         # 「巡逻绕圈」一项，控件没得选只剩占地方。bot.mode 固定写 "normal"。）
 
@@ -1329,6 +1372,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         layout.addWidget(error_label)
         layout.addLayout(columns)
+        layout.addWidget(self.checkbox_damage_counterattack, alignment=Qt.AlignLeft)
+        layout.addLayout(counterattack_form)
         gbox.setLayout(layout)
         return gbox
 
@@ -1348,11 +1393,13 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
 
         self.pickup_cooldown = QDoubleSpinBox()
+        self.pickup_cooldown.setLocale(
+            QLocale(QLocale.Chinese, QLocale.China))
         self.pickup_cooldown.setRange(0.5, 10.0)   # 下限 0.5：更低既没用也更可疑
         self.pickup_cooldown.setSingleStep(0.1)
         self.pickup_cooldown.setDecimals(1)
         self.pickup_cooldown.setSuffix(" 秒")
-        self.pickup_cooldown.setFixedWidth(110)
+        self.pickup_cooldown.setMinimumWidth(150)
         self.pickup_cooldown.setToolTip(
             "两次拾取之间的**基准**间隔。\n"
             "实际间隔会在 ±30% 内随机波动（如填 2.0 → 实际 1.4~2.6 秒）。\n"
@@ -2364,6 +2411,13 @@ class MainWindow(QMainWindow):
             self.attack_range_x.setText(str(atk_cfg["range_x"]))
             self.attack_cooldown.setText(str(atk_cfg["cooldown"]))
             self.attack_range_y.setText(str(atk_cfg["range_y"]))
+            counterattack_cfg = self.cfg.get("damage_counterattack", {})
+            self.checkbox_damage_counterattack.setChecked(
+                bool(counterattack_cfg.get("enabled", False)))
+            self.counterattack_detect_window.setValue(
+                float(counterattack_cfg.get("detect_window_sec", 0.8)))
+            self.counterattack_confirm_drops.setValue(
+                int(counterattack_cfg.get("confirm_drops", 2)))
 
     def apply_config_to_ui(self):
         # === 挂机方式 ===
@@ -2391,6 +2445,13 @@ class MainWindow(QMainWindow):
         self.attack_range_x.setText(str(atk_cfg["range_x"]))
         self.attack_cooldown.setText(str(atk_cfg["cooldown"]))
         self.attack_range_y.setText(str(atk_cfg["range_y"]))
+        counterattack_cfg = self.cfg.get("damage_counterattack", {})
+        self.checkbox_damage_counterattack.setChecked(
+            bool(counterattack_cfg.get("enabled", False)))
+        self.counterattack_detect_window.setValue(
+            float(counterattack_cfg.get("detect_window_sec", 0.8)))
+        self.counterattack_confirm_drops.setValue(
+            int(counterattack_cfg.get("confirm_drops", 2)))
 
         # === Key Bindings ===
         key_cfg = self.cfg["key"]
@@ -3748,6 +3809,13 @@ class MainWindow(QMainWindow):
             ao["cooldown"] = _num(self.attack_cooldown.text(), ao["cooldown"], float)
         else:
             logger.error(f"[update_cfg_from_main_ui] Unsupported attack mode: {self.cfg['bot']['attack']}")
+        counterattack_cfg = self.cfg.setdefault("damage_counterattack", {})
+        counterattack_cfg["enabled"] = (
+            self.checkbox_damage_counterattack.isChecked())
+        counterattack_cfg["detect_window_sec"] = round(
+            self.counterattack_detect_window.value(), 1)
+        counterattack_cfg["confirm_drops"] = (
+            self.counterattack_confirm_drops.value())
         # Key binding gbox
         self.cfg["key"]["teleport"] = _key(
             self.teleport_key, self.cfg["key"].get("teleport"))

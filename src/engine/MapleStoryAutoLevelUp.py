@@ -62,6 +62,7 @@ from src.utils.bars import BarsDetector
 from src.utils.bar_smoothing import BarsSmoother
 from src.utils.potions import PotionDrinker, press_potion
 from src.utils.env_precheck import check_bars_environment, format_for_log
+from src.utils.damage_counterattack import DamageCounterattack
 
 class MapleStoryAutoBot:
     '''
@@ -195,6 +196,7 @@ class MapleStoryAutoBot:
         self.potion_enabled = True  # 喝药总开关（界面可实时切换）
         self.n_potion_drunk = 0     # 本次运行累计喝了几次（给界面显示）
         self.t_last_bars_log = time.time()  # 血蓝读数日志节流（每 5 秒一行）
+        self.damage_counterattack = DamageCounterattack.from_dict(None)
 
         # 上一帧**实际发出**的左右指令（2026-09-12 加）
         # ⚠️ 为什么需要它：出招必须**先转身再按技能键**，否则技能会朝旧朝向飞出去，
@@ -492,6 +494,10 @@ class MapleStoryAutoBot:
 
         try:
             hp_res, mp_res = self.bars_detector.detect(img_frame)
+            self.damage_counterattack.observe_hp(
+                hp_res.percent if hp_res.valid else None,
+                time.monotonic(),
+            )
             self.hp_percent, self.mp_percent = self.bars_smoother.update(hp_res, mp_res)
 
             if self.potion_drinker is None:
@@ -525,6 +531,53 @@ class MapleStoryAutoBot:
             logger.error(
                 f"[血蓝监控] 识别过程出错，已停用自动喝药（挂机不受影响）：{e}",
                 exc_info=True)
+
+    def _setup_damage_counterattack(self, cfg):
+        try:
+            self.damage_counterattack = DamageCounterattack.from_dict(
+                cfg.get("damage_counterattack"))
+        except (TypeError, ValueError) as e:
+            self.damage_counterattack = DamageCounterattack.from_dict(None)
+            logger.error(f"[重叠反击] 配置不合法，功能已关闭：{e}")
+            return
+
+        if not self.damage_counterattack.enabled:
+            return
+        if self.bars_detector is None:
+            logger.warning(
+                "[重叠反击] 已勾选，但血量识别当前不可用，因此不会触发。"
+                "请确认游戏为 1366x768 窗口化、缩放 100%。")
+            return
+        logger.info("[重叠反击] 已启用：未识别到怪但连续掉血时暂停巡逻并反击。")
+
+    def _cancel_damage_counterattack(self, reason):
+        if self.damage_counterattack.cancel():
+            logger.info(f"[重叠反击] 结束：{reason}，恢复原有逻辑。")
+
+    def _apply_damage_counterattack(self, cooldown):
+        now = time.time()
+        decision = self.damage_counterattack.decide(
+            now=time.monotonic(),
+            has_detected_monsters=False,
+            attack_mode=self.cfg["bot"]["attack"],
+            attack_ready=now - self.t_last_attack > cooldown,
+            current_direction=self.cmd_move_x_last,
+            turn_frames=self.cfg["directional_attack"].get("turn_frames", 3),
+        )
+        if decision.event == "started":
+            logger.warning(
+                "[重叠反击] 未识别到怪但检测到连续掉血，暂停巡逻并开始反击。")
+        elif decision.event == "stopped":
+            logger.info(f"[重叠反击] 结束：{decision.reason}，恢复巡逻。")
+        if not decision.active:
+            return False
+
+        self.cmd_move_x = decision.move_x
+        self.cmd_move_y = "none"
+        self.cmd_action = "attack" if decision.should_attack else "none"
+        if decision.should_attack:
+            self.t_last_attack = now
+        return True
 
     def set_potion_enabled(self, enabled):
         '''界面/热键切换喝药总开关（2026-09-27 加）。
@@ -1040,6 +1093,7 @@ class MapleStoryAutoBot:
 
         # ── 血蓝监控 + 自动喝药：装配（2026-09-27 加）─────────────────────
         self._setup_bars_and_potions(cfg)
+        self._setup_damage_counterattack(cfg)
 
         # Update cfg
         self.cfg = cfg
@@ -4417,10 +4471,13 @@ class MapleStoryAutoBot:
         # ⚠️ 配套的出口在 update_cmd_by_route：回正线**一帧像素都找不到**时立刻
         #    退出回正状态（is_using_home_route=False），否则会「既不走也不打」。
         if self.is_using_home_route:
+            self._cancel_damage_counterattack("正在执行回正路线")
             return
 
         # Check if no mob to attack
         if len(self.monsters) == 0:
+            if self._apply_damage_counterattack(cooldown):
+                return
             # ⚠️ 必须清掉上一帧残留的攻击指令（2026-09-12 修）
             # cmd_move_x / cmd_move_y / cmd_action 是**跨帧保持**的实例属性，原实现
             # （上游逐字如此）在这里直接 return，于是只要某一帧设过 "attack"，怪没了
@@ -4431,6 +4488,8 @@ class MapleStoryAutoBot:
             if self.cmd_action == "attack":
                 self.cmd_action = "none"
             return
+
+        self._cancel_damage_counterattack("重新识别到怪物")
 
         # Update attack command
         if self.cfg["bot"]["attack"] == "aoe_skill":

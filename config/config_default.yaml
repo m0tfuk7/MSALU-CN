@@ -81,6 +81,17 @@ aoe_skill:
   range_y: 170               # ↕️ Vertical skill range (in pixels)
   cooldown: 0.05             # TODO: Currently just a filler
 
+damage_counterattack:
+  # 怪物重叠或特效遮挡导致模板漏识别时，用连续掉血作为短时反击兜底。
+  enabled: false
+  confirm_drops: 2
+  detect_window_sec: 0.8
+  min_single_drop_percent: 0.5
+  min_total_drop_percent: 1.5
+  quiet_exit_sec: 1.2
+  max_duration_sec: 4.0
+  direction_switch_sec: 0.8
+
 # 血量监控（health_monitor）已于 2026-09-10 移除：
 # 它的血条识别把上游 UI 尺寸写死在代码里（注释明写 752x1282、条宽高比 7.5），
 # 国服是 Unity 重制 UI，这套判据实测不成立；而且找不到血条时静默返回、不报错，
