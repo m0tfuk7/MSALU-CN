@@ -1347,9 +1347,23 @@ class MainWindow(QMainWindow):
         counterattack_form.addRow(
             "确认掉血次数：", self.counterattack_confirm_drops)
 
+        self.counterattack_quiet_exit = QDoubleSpinBox()
+        self.counterattack_quiet_exit.setLocale(
+            QLocale(QLocale.Chinese, QLocale.China))
+        self.counterattack_quiet_exit.setRange(0.1, 30.0)
+        self.counterattack_quiet_exit.setSingleStep(0.1)
+        self.counterattack_quiet_exit.setDecimals(1)
+        self.counterattack_quiet_exit.setSuffix(" 秒")
+        self.counterattack_quiet_exit.setMinimumWidth(150)
+        self.counterattack_quiet_exit.setToolTip(
+            "进入反击后，连续这么久没有再次掉血就停止攻击并恢复巡逻。")
+        counterattack_form.addRow(
+            "无掉血退出时间：", self.counterattack_quiet_exit)
+
         def toggle_counterattack_fields(enabled):
             self.counterattack_detect_window.setEnabled(enabled)
             self.counterattack_confirm_drops.setEnabled(enabled)
+            self.counterattack_quiet_exit.setEnabled(enabled)
 
         self.checkbox_damage_counterattack.toggled.connect(
             toggle_counterattack_fields)
@@ -2418,6 +2432,8 @@ class MainWindow(QMainWindow):
                 float(counterattack_cfg.get("detect_window_sec", 0.8)))
             self.counterattack_confirm_drops.setValue(
                 int(counterattack_cfg.get("confirm_drops", 2)))
+            self.counterattack_quiet_exit.setValue(
+                float(counterattack_cfg.get("quiet_exit_sec", 1.2)))
 
     def apply_config_to_ui(self):
         # === 挂机方式 ===
@@ -2452,6 +2468,8 @@ class MainWindow(QMainWindow):
             float(counterattack_cfg.get("detect_window_sec", 0.8)))
         self.counterattack_confirm_drops.setValue(
             int(counterattack_cfg.get("confirm_drops", 2)))
+        self.counterattack_quiet_exit.setValue(
+            float(counterattack_cfg.get("quiet_exit_sec", 1.2)))
 
         # === Key Bindings ===
         key_cfg = self.cfg["key"]
@@ -3816,6 +3834,8 @@ class MainWindow(QMainWindow):
             self.counterattack_detect_window.value(), 1)
         counterattack_cfg["confirm_drops"] = (
             self.counterattack_confirm_drops.value())
+        counterattack_cfg["quiet_exit_sec"] = round(
+            self.counterattack_quiet_exit.value(), 1)
         # Key binding gbox
         self.cfg["key"]["teleport"] = _key(
             self.teleport_key, self.cfg["key"].get("teleport"))
