@@ -63,6 +63,7 @@ from src.utils.bar_smoothing import BarsSmoother
 from src.utils.potions import PotionDrinker, press_potion
 from src.utils.env_precheck import check_bars_environment, format_for_log
 from src.utils.damage_counterattack import DamageCounterattack
+from src.utils.humanized_break import HumanizedBreak
 
 class MapleStoryAutoBot:
     '''
@@ -197,6 +198,7 @@ class MapleStoryAutoBot:
         self.n_potion_drunk = 0     # 本次运行累计喝了几次（给界面显示）
         self.t_last_bars_log = time.time()  # 血蓝读数日志节流（每 5 秒一行）
         self.damage_counterattack = DamageCounterattack.from_dict(None)
+        self.humanized_break = HumanizedBreak.from_dict(None)
 
         # 上一帧**实际发出**的左右指令（2026-09-12 加）
         # ⚠️ 为什么需要它：出招必须**先转身再按技能键**，否则技能会朝旧朝向飞出去，
@@ -351,6 +353,13 @@ class MapleStoryAutoBot:
         for i, k in enumerate(((cfg.get("buff_skill", {}) or {}).get("keys")) or []):
             if k:
                 items.append((f"buff 技能第 {i + 1} 个", k))
+        random_keys = (
+            (cfg.get("humanized_break", {}) or {}).get("random_keys") or [])
+        if isinstance(random_keys, str):
+            random_keys = random_keys.replace("，", ",").split(",")
+        for i, k in enumerate(random_keys):
+            if k:
+                items.append((f"拟人停顿随机按键第 {i + 1} 个", k))
 
         # 药水键（hp/mp 各档位的 key）
         pot = cfg.get("potion", {}) or {}
@@ -577,6 +586,70 @@ class MapleStoryAutoBot:
         self.cmd_action = "attack" if decision.should_attack else "none"
         if decision.should_attack:
             self.t_last_attack = now
+        return True
+
+    def _setup_humanized_break(self, cfg):
+        try:
+            self.humanized_break = HumanizedBreak.from_dict(
+                cfg.get("humanized_break"))
+        except (TypeError, ValueError) as e:
+            self.humanized_break = HumanizedBreak.from_dict(None)
+            logger.error(f"[拟人停顿] 配置不合法，功能已关闭：{e}")
+            return
+
+        if not self.humanized_break.enabled:
+            logger.info("[拟人停顿] 未启用。")
+            return
+        break_cfg = self.humanized_break.config
+        keys = ", ".join(break_cfg.random_keys) or "未配置（停顿时不额外按键）"
+        logger.info(
+            "[拟人停顿] 已启用：每 "
+            f"{break_cfg.interval_min_sec / 60:g}~"
+            f"{break_cfg.interval_max_sec / 60:g} 分钟随机停顿 "
+            f"{break_cfg.duration_min_sec:g}~"
+            f"{break_cfg.duration_max_sec:g} 秒；随机短按键：{keys}。")
+
+    def apply_humanized_break(self):
+        decision = self.humanized_break.decide(
+            now=time.monotonic(),
+            allow_break=(
+                not self.is_using_home_route
+                and not self.damage_counterattack.active
+            ),
+        )
+        if decision.event == "started":
+            logger.info(
+                f"[拟人停顿] 开始停顿 {decision.duration_sec:.1f} 秒，"
+                "已松开移动和攻击按键；"
+                + (f"本次选择按键：{decision.key_to_press}。"
+                   if decision.key_to_press
+                   else "本次没有配置随机按键。"))
+        elif decision.event == "stopped":
+            logger.info(
+                f"[拟人停顿] 结束：{decision.reason}，恢复正常打怪逻辑；"
+                f"下一次预计在 {decision.next_interval_sec / 60:.2f} 分钟后触发。")
+        elif decision.event == "scheduled":
+            logger.info(
+                "[拟人停顿] 已安排下一次停顿：预计在 "
+                f"{decision.next_interval_sec / 60:.2f} 分钟后触发。")
+        elif decision.event == "rescheduled":
+            logger.info(
+                f"[拟人停顿] 原计划到点但{decision.reason}，本次跳过；"
+                f"已重新安排在 {decision.next_interval_sec / 60:.2f} 分钟后。")
+        if not decision.active:
+            return False
+
+        self.cmd_move_x = "none"
+        self.cmd_move_y = "none"
+        self.cmd_action = "none"
+        if decision.key_to_press:
+            if self.kb.is_game_window_active():
+                self.kb.release_all_key()
+                self.kb.press_key(decision.key_to_press)
+                logger.info(
+                    f"[拟人停顿] 已随机短按一次：{decision.key_to_press}")
+            else:
+                logger.info("[拟人停顿] 游戏不在前台，跳过本次随机按键。")
         return True
 
     def set_potion_enabled(self, enabled):
@@ -1094,6 +1167,7 @@ class MapleStoryAutoBot:
         # ── 血蓝监控 + 自动喝药：装配（2026-09-27 加）─────────────────────
         self._setup_bars_and_potions(cfg)
         self._setup_damage_counterattack(cfg)
+        self._setup_humanized_break(cfg)
 
         # Update cfg
         self.cfg = cfg

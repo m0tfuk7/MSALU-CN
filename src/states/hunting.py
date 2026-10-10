@@ -23,13 +23,17 @@ class HuntingState(State):
         # Get attack commend by detecting mobs near players
         self.bot.update_cmd_by_mob_detection()
 
+        # 拟人停顿在路线和索敌完成后统一清空本帧指令；回正路线和重叠反击
+        # 优先级更高，会立即结束停顿并保留它们生成的指令。
+        is_humanized_break = self.bot.apply_humanized_break()
+
         # 卡死处理（2026-09-15 改）
         # 原来固定调 update_cmd_by_random（12 种组合**均匀乱抽**，不知道悬崖在哪）：
         # ① 窄平台上乱抽 = 直接掉下去（实测抽到 right none jump，右边正好是悬崖）；
         # ② 它把真因**盖住**了（随机跳把角色从 (100,122) 踹到 (100,118)，
         #    症状从"在原地蹭"变成"跳到另一层"，日志上看"它动了"，更难查）。
         # 现在按 config 的 watchdog.on_stuck 分派，默认 alert = **不乱动 + 弹置顶提示**。
-        if self.bot.is_player_stuck():
+        if not is_humanized_break and self.bot.is_player_stuck():
             self.bot.handle_stuck()
 
         # send command to keyboard controller
