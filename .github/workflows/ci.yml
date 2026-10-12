@@ -84,6 +84,9 @@ jobs:
             'verify_map_buttons',
             'verify_title_bar_adaptive',
             'verify_pickup',
+            'verify_humanized_break',
+            'verify_direction_key_hold',
+            'verify_damage_counterattack',
             'verify_ci_green_check'
           )
           # ⚠️ 注意：tools/verify_nametag_fallback_limit.py **不进 CI** ——

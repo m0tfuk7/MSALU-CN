@@ -94,13 +94,13 @@ damage_counterattack:
   direction_switch_sec: 0.8
 
 humanized_break:
-  # 巡逻过程中偶尔停下，松开移动和攻击按键；使用非阻塞计时，不影响主循环。
+  # 随机停顿优先于回正和反击，暂停移动、攻击和拾取，保留自动喝药和 Buff。
   enabled: false
   interval_min_sec: 180.0
   interval_max_sec: 480.0
   duration_min_sec: 2.0
   duration_max_sec: 6.0
-  # 可选：每次停顿随机短按其中一个键一次。默认留空；请勿填写游戏功能键或系统快捷键。
+  # 兼容旧配置：随机短按已停用，不会发送。
   random_keys: []
 
 # 血量监控（health_monitor）已于 2026-09-10 移除：
@@ -870,7 +870,7 @@ system:
   #      **不会**让角色走得更快。
   #   💡 CPU 吃紧就往下调，但别低于 20（低于 20 每次决策又要走 2px 以上）。
   fps_limit_main: 30                # 🚥 Main loop FPS – 主循环多快决策一次
-  fps_limit_keyboard_controller: 30 # 🚥 Keyboard controller thread FPS
+  fps_limit_keyboard_controller: 30 # 🚥 指令检查频率；方向不变时保持按住，不逐帧重复发键
   # ⚠️ 截图是主循环的**上游**：15 FPS = 每 66ms 才刷新一次画面，主循环再快
   #    拿到的也是过期坐标。所以这里要跟着一起提。
   fps_limit_window_capturor: 30     # 🚥 Window capture thread FPS

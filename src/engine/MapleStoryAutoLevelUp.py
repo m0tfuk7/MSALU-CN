@@ -199,6 +199,7 @@ class MapleStoryAutoBot:
         self.t_last_bars_log = time.time()  # 血蓝读数日志节流（每 5 秒一行）
         self.damage_counterattack = DamageCounterattack.from_dict(None)
         self.humanized_break = HumanizedBreak.from_dict(None)
+        self._humanized_break_started_at = None
 
         # 上一帧**实际发出**的左右指令（2026-09-12 加）
         # ⚠️ 为什么需要它：出招必须**先转身再按技能键**，否则技能会朝旧朝向飞出去，
@@ -353,14 +354,6 @@ class MapleStoryAutoBot:
         for i, k in enumerate(((cfg.get("buff_skill", {}) or {}).get("keys")) or []):
             if k:
                 items.append((f"buff 技能第 {i + 1} 个", k))
-        random_keys = (
-            (cfg.get("humanized_break", {}) or {}).get("random_keys") or [])
-        if isinstance(random_keys, str):
-            random_keys = random_keys.replace("，", ",").split(",")
-        for i, k in enumerate(random_keys):
-            if k:
-                items.append((f"拟人停顿随机按键第 {i + 1} 个", k))
-
         # 药水键（hp/mp 各档位的 key）
         pot = cfg.get("potion", {}) or {}
         for kind in ("hp", "mp"):
@@ -589,6 +582,7 @@ class MapleStoryAutoBot:
         return True
 
     def _setup_humanized_break(self, cfg):
+        self._humanized_break_started_at = None
         try:
             self.humanized_break = HumanizedBreak.from_dict(
                 cfg.get("humanized_break"))
@@ -601,29 +595,26 @@ class MapleStoryAutoBot:
             logger.info("[拟人停顿] 未启用。")
             return
         break_cfg = self.humanized_break.config
-        keys = ", ".join(break_cfg.random_keys) or "未配置（停顿时不额外按键）"
         logger.info(
             "[拟人停顿] 已启用：每 "
             f"{break_cfg.interval_min_sec / 60:g}~"
             f"{break_cfg.interval_max_sec / 60:g} 分钟随机停顿 "
             f"{break_cfg.duration_min_sec:g}~"
-            f"{break_cfg.duration_max_sec:g} 秒；随机短按键：{keys}。")
+            f"{break_cfg.duration_max_sec:g} 秒；停顿优先于回正和反击，保留自动喝药和 Buff。")
+        if break_cfg.random_keys:
+            logger.info("[拟人停顿] 旧配置的随机短按键已停用，不会发送。")
 
     def apply_humanized_break(self):
+        now = time.monotonic()
         decision = self.humanized_break.decide(
-            now=time.monotonic(),
-            allow_break=(
-                not self.is_using_home_route
-                and not self.damage_counterattack.active
-            ),
+            now=now,
+            allow_break=True,
         )
         if decision.event == "started":
+            self._humanized_break_started_at = now
             logger.info(
                 f"[拟人停顿] 开始停顿 {decision.duration_sec:.1f} 秒，"
-                "已松开移动和攻击按键；"
-                + (f"本次选择按键：{decision.key_to_press}。"
-                   if decision.key_to_press
-                   else "本次没有配置随机按键。"))
+                "暂停回正、反击、移动、攻击和拾取，保留自动喝药和 Buff。")
         elif decision.event == "stopped":
             logger.info(
                 f"[拟人停顿] 结束：{decision.reason}，恢复正常打怪逻辑；"
@@ -637,19 +628,23 @@ class MapleStoryAutoBot:
                 f"[拟人停顿] 原计划到点但{decision.reason}，本次跳过；"
                 f"已重新安排在 {decision.next_interval_sec / 60:.2f} 分钟后。")
         if not decision.active:
+            if self._humanized_break_started_at is not None:
+                paused = now - self._humanized_break_started_at
+                # 主动停顿不消耗卡死、未攻击及当前回正的超时预算。
+                self.t_last_attack += paused
+                self.t_watch_dog += paused
+                if self.is_using_home_route and self.home_enter_t > 0:
+                    self.home_enter_t += paused
+                self._humanized_break_started_at = None
+                self.damage_counterattack.cancel()
+            self.kb.set_humanized_break(False)
             return False
 
+        self.kb.set_humanized_break(True)
+        self._cancel_damage_counterattack("拟人停顿优先")
         self.cmd_move_x = "none"
         self.cmd_move_y = "none"
         self.cmd_action = "none"
-        if decision.key_to_press:
-            if self.kb.is_game_window_active():
-                self.kb.release_all_key()
-                self.kb.press_key(decision.key_to_press)
-                logger.info(
-                    f"[拟人停顿] 已随机短按一次：{decision.key_to_press}")
-            else:
-                logger.info("[拟人停顿] 游戏不在前台，跳过本次随机按键。")
         return True
 
     def set_potion_enabled(self, enabled):
@@ -5007,11 +5002,17 @@ class MapleStoryAutoBot:
         self.loc_player_global = self.get_player_location_on_global_map()
 
 
+        ######################
+        ### State Behavior ###
+        ######################
+        self.fsm.do_state_stuff()
+
         #######################
         ### Attack WatchDog ###
         ####################### Check if last attack is timeout
         dt = time.time() - self.t_last_attack
-        if self.cfg['bot']['mode'] == 'normal' and \
+        if not self.humanized_break.active and \
+            self.cfg['bot']['mode'] == 'normal' and \
             dt > self.cfg["watchdog"]["last_attack_timeout"]:
             logger.info(f"[Attack Timeout] Last attack timeout for {round(dt, 2)} seconds")
             # 换频道已移除（国服到处是人，换频道没意义）→ 超时后统一「回城并停止脚本」
@@ -5020,11 +5021,6 @@ class MapleStoryAutoBot:
             self.is_terminated = True
             self.kb.is_terminated = True
 
-
-        ######################
-        ### State Behavior ###
-        ######################
-        self.fsm.do_state_stuff()
 
         # ── 血蓝监控 + 自动喝药（2026-09-27 加）──────────────────────────
         # 放在 do_state_stuff **之后**的原因：

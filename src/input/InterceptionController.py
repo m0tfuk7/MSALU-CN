@@ -171,19 +171,23 @@ def normalize_key(key):
 
 
 def key_down(key):
-    """按下按键不释放"""
+    """按下按键不释放，返回是否成功发送。"""
     try:
         interception.key_down(normalize_key(key))
+        return True
     except Exception as e:
         _report_key_failure("key_down", key, e)
+        return False
 
 
 def key_up(key):
-    """释放按键"""
+    """释放按键，返回是否成功发送。"""
     try:
         interception.key_up(normalize_key(key))
+        return True
     except Exception as e:
         _report_key_failure("key_up", key, e)
+        return False
 
 
 def press_key(key, duration=None):

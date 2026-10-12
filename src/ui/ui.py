@@ -1405,7 +1405,8 @@ class MainWindow(QMainWindow):
         self.checkbox_humanized_break = QCheckBox(
             "启用巡逻随机停顿")
         self.checkbox_humanized_break.setToolTip(
-            "正常巡逻时随机停下并松开移动、跳跃和攻击按键，停顿结束后自动继续。")
+            "随机停顿优先于回正和重叠反击；暂停移动、攻击和拾取，"
+            "保留自动喝药和 Buff，时间结束后自动继续。")
         layout.addWidget(self.checkbox_humanized_break, alignment=Qt.AlignLeft)
 
         form = QFormLayout()
@@ -1427,11 +1428,11 @@ class MainWindow(QMainWindow):
         form.addRow("最长停顿时间（秒）：", self.humanized_duration_max)
 
         self.humanized_random_keys = QLineEdit()
-        self.humanized_random_keys.setPlaceholderText("留空关闭，例如：f9, f10")
+        self.humanized_random_keys.setPlaceholderText("已停用：停顿期间保留自动喝药和 Buff")
+        self.humanized_random_keys.setEnabled(False)
         self.humanized_random_keys.setToolTip(
-            "每次停顿随机选择其中一个键短按一次，使用英文逗号分隔。"
-            "不存在通用的安全按键，请勿填写移动、攻击、药水、聊天或系统快捷键。")
-        form.addRow("随机短按键：", self.humanized_random_keys)
+            "仅显示旧配置以兼容已有方案；停顿期间不会发送随机短按键。")
+        form.addRow("随机短按键（已停用）：", self.humanized_random_keys)
         layout.addLayout(form)
 
         fields = (
@@ -1439,7 +1440,6 @@ class MainWindow(QMainWindow):
             self.humanized_interval_max,
             self.humanized_duration_min,
             self.humanized_duration_max,
-            self.humanized_random_keys,
         )
 
         def toggle_fields(enabled):

@@ -10,7 +10,7 @@ import threading
 import time
 
 # Library import - 使用 Interception 驱动替代 pyautogui
-from src.input.InterceptionController import key_down, key_up, press_key, init_interception
+from src.input.InterceptionController import key_down, key_up, press_key, init_interception, normalize_key
 
 # Local import
 from src.utils.logger import logger, jump_trace_on
@@ -135,6 +135,9 @@ class KeyBoardController():
     '''
     def __init__(self, cfg):
         self.cfg = cfg
+        self._input_lock = threading.RLock()
+        self._held_direction_keys: set[str] = set()
+        self.humanized_break_active = False
         self.cmd_action = "none"
         self.cmd_up_down = "none"
         self.cmd_left_right = "none"
@@ -240,6 +243,16 @@ class KeyBoardController():
         '''
         self.cmd_left_right, self.cmd_up_down, self.cmd_action = new_command.split()
 
+    def set_humanized_break(self, active):
+        # 与单次发键串行，避免松键后键盘线程又用旧指令按下方向键。
+        with self._input_lock:
+            if active == self.humanized_break_active:
+                return
+            self.humanized_break_active = active
+            self.set_command("none none none")
+            if active:
+                self.release_all_key()
+
     def is_game_window_active(self):
         '''
         Check if the game window is currently the active (foreground) window.
@@ -332,24 +345,46 @@ class KeyBoardController():
         '''
         Release all key
         '''
-        key_up("left")
-        key_up("right")
-        key_up("up")
-        key_up("down")
-        # Also release attack keys to stop any ongoing attacks
-        key_up(self.attack_key)
+        with self._input_lock:
+            for key in ("left", "right", "up", "down", self.attack_key):
+                if key_up(key):
+                    self._held_direction_keys.discard(normalize_key(key))
 
     def _kd(self, key):
         '''按下某键并计数（计数供 [按键状态] 心跳用，见 n_key_sent）。'''
-        key_down(key)
-        self.n_key_sent += 1
+        with self._input_lock:
+            if not self.humanized_break_active and key_down(key):
+                self.n_key_sent += 1
+                normalized = normalize_key(key)
+                if normalized in ("left", "right", "up", "down"):
+                    self._held_direction_keys.add(normalized)
+
+    def _set_direction_keys(self, command: str, negative: str, positive: str) -> None:
+        if command not in (negative, positive, "none", "stop"):
+            logger.error(f"[KeyBoardController] Unsupported direction command: {command}")
+            return
+        with self._input_lock:
+            desired = (
+                command if command in (negative, positive)
+                and not self.humanized_break_active else None
+            )
+            for key in (negative, positive):
+                if key != desired and key in self._held_direction_keys:
+                    if not key_up(key):
+                        return
+                    self._held_direction_keys.remove(key)
+            if desired is not None and desired not in self._held_direction_keys:
+                self._kd(desired)
 
     def _press(self, key):
         '''点按某键并计数。空键名直接跳过（配置里允许留空，如 teleport）。'''
         if not key:
             return
-        press_key(key)
-        self.n_key_sent += 1
+        with self._input_lock:
+            if not self.humanized_break_active:
+                press_key(key)
+                self._held_direction_keys.discard(normalize_key(key))
+                self.n_key_sent += 1
 
     def press_key(self, key):
         '''
@@ -359,12 +394,17 @@ class KeyBoardController():
         但本类此前只有私有的 `_press`，没有 `press_key`
         ⇒ 运行时报 `'KeyBoardController' object has no attribute 'press_key'`，
         症状是**喝药一直静默失败**（只打一行 WARNING，挂机本身不停）。
-        这里补上公开方法，内部仍走 `_press`：
+        公开方法与 `_press` 共用 Interception 点按通路，但保留停顿期间的喝药豁免：
           · 复用同一套计数（n_key_sent 供 [按键状态] 心跳统计）；
           · 与引擎内部点按走**同一条** Interception 通路，不存在两套行为。
         不要删上面的 `_press`（引擎主循环在用），也不要改名叫 `_press`。
         '''
-        self._press(key)
+        # 自动喝药和 Buff 共用停顿期间允许发送的点按入口。
+        if key:
+            with self._input_lock:
+                press_key(key)
+                self._held_direction_keys.discard(normalize_key(key))
+                self.n_key_sent += 1
 
     # ── 🖱️ 自动拾取（2026-10-01 加）────────────────────────────────────
     #: 冷却随机抖动比例：实际间隔 = cooldown × uniform(1-J, 1+J)。
@@ -475,60 +515,37 @@ class KeyBoardController():
             #    放在 Buff 之前、且**不改变**任何既有指令的分支结构 ——
             #    它是一路独立的「定时点按」，与路线/攻击指令互不干扰。
             #    绝大多数帧会在内部直接 return（时间没到），开销可忽略。
-            self._try_pickup(time.time())
+            if not self.humanized_break_active:
+                self._try_pickup(time.time())
 
             # Buff skill
             for i, buff_skill_key in enumerate(self.cfg["buff_skill"]["keys"]):
                 cooldown = self.cfg["buff_skill"]["cooldown"][i]
                 if time.time() - self.t_last_buff_cast[i] >= cooldown and \
                     time.time() - self.t_last_skill > self.cfg["buff_skill"]["action_cooldown"]:
-                    self._press(buff_skill_key)
+                    self.press_key(buff_skill_key)
                     logger.info(f"[Buff] Press buff skill key: '{buff_skill_key}' (cooldown: {cooldown}s)")
                     # Reset timers
                     self.t_last_buff_cast[i] = time.time()
                     self.t_last_skill = time.time()
                     break
 
+            if self.humanized_break_active:
+                if self._held_direction_keys:
+                    self.release_all_key()
+                self.limit_fps()
+                continue
+
             ##########################
             ### Left-Right Command ###
             ##########################
-            if self.cmd_left_right == "left":
-                key_up("right")
-                self._kd("left")
-            elif self.cmd_left_right == "right":
-                key_up("left")
-                self._kd("right")
-            elif self.cmd_left_right == "stop":
-                key_up("left")
-                key_up("right")
-            elif self.cmd_left_right == "none":
-                if self.cmd_left_right_last != "none":
-                    key_up("left")
-                    key_up("right")
-            else:
-                logger.error("[KeyBoardController] Unsupported left-right command: "
-                             f"{self.cmd_left_right}")
+            self._set_direction_keys(self.cmd_left_right, "left", "right")
             self.cmd_left_right_last = self.cmd_left_right
 
             #######################
             ### Up-Down Command ###
             #######################
-            if self.cmd_up_down == "up":
-                key_up("down")
-                self._kd("up")
-            elif self.cmd_up_down == "down":
-                key_up("up")
-                self._kd("down")
-            elif self.cmd_up_down == "stop":
-                key_up("up")
-                key_up("down")
-            elif self.cmd_up_down == "none":
-                if self.cmd_up_down_last != "none":
-                    key_up("up")
-                    key_up("down")
-            else:
-                logger.error("[KeyBoardController] Unsupported up-down command: "
-                             f"{self.cmd_up_down}")
+            self._set_direction_keys(self.cmd_up_down, "up", "down")
             self.cmd_up_down_last = self.cmd_up_down
 
             ######################
@@ -594,15 +611,13 @@ class KeyBoardController():
                 logger.error("[KeyBoardController] Unsupported action command: "
                              f"{self.cmd_action}")
 
-            # 按键心跳（每 5 秒一条）：把「指令是 none，压根没键可发」和
-            # 「键确实发了，但游戏没反应」这两种病因区分开 —— 没有它，两者在
-            # 日志里长得一模一样（都是啥都没有）。发键次数为 0 而指令非 none，
-            # 就说明卡在守卫/使能开关上。
+            # 保持方向时不重复发键，心跳同时展示持键状态以免被误判为停止输入。
             if time.time() - self.t_last_kb_status >= 5:
                 self.t_last_kb_status = time.time()
                 logger.info(
                     f"[按键状态] 指令({self.cmd_left_right} {self.cmd_up_down} "
                     f"{self.cmd_action}) 近5秒实际发键 {self.n_key_sent} 次 "
+                    f"保持方向={','.join(sorted(self._held_direction_keys)) or '无'} "
                     f"fps={self.fps}")
                 self.n_key_sent = 0
 
